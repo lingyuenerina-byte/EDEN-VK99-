@@ -1,0 +1,12 @@
+[package]
+name = "eden"
+version = "1.0.0"
+description = "EDEN-VK99II 幻映 — 视频→键盘副屏 一键刷入 (Tauri)"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+rfd = "0.15"

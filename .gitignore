@@ -1,0 +1,16 @@
+# 构建缓存与产物
+target/
+dist/
+*.exe
+
+# Python
+__pycache__/
+*.pyc
+
+# 运行时生成目录
+studio_frames/
+redist/*.exe
+eden-tauri/src-tauri/engine/redist/*.exe
+
+# 日志
+*.log

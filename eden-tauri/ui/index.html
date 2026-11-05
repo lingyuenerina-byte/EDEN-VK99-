@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EDEN-VK99Ⅱ「幻映」</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="boot" class="boot">
+    <div class="bootcard">
+      <div class="boottitle">EDEN-VK99Ⅱ「幻映」</div>
+      <div id="bootmsg">正在唤醒引擎 (首次启动会多等一会)…</div>
+      <div class="bootbar"><i></i></div>
+    </div>
+  </div>
+
+  <main id="app" hidden>
+    <!-- 左: 舞台 -->
+    <aside class="left">
+      <div class="brand">
+        <b>EDEN-VK99Ⅱ</b><span>「幻映」</span>
+        <em id="drvbadge" class="badge">驱动检测中…</em>
+        <em id="phasebadge" class="badge gray">待命</em>
+      </div>
+
+      <div class="stage-wrap">
+        <div class="stagecol">
+          <div class="stage" id="stage">
+            <img id="poster" alt="" draggable="false">
+            <video id="anim" loop muted playsinline controls hidden></video>
+            <div id="cropbox" class="cropbox" hidden>
+              <i class="g tl"></i><i class="g tr"></i><i class="g bl"></i><i class="g br"></i>
+            </div>
+            <div id="noimg" class="noimg">还没有素材 — 点右边「选择素材」<br>
+              支持 mp4 / avi / mov / mkv / webm / gif / png / jpg</div>
+          </div>
+          <!-- 时间轴: 拖动选段 -->
+          <div class="trow" id="trow" hidden>
+            <div class="tlchips">
+              <button id="btnPlay" class="chip" title="播放/暂停 (空格)">
+                <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>播放</button>
+              <button id="chipSrc" class="chip on" title="播放原素材">
+                <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>原片</button>
+              <button id="chipFx" class="chip" title="播放拆帧后的成片" disabled>
+                <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>成片</button>
+            </div>
+            <div class="tl-track" id="tlTrack">
+              <div class="tl-seg" id="tlSeg" title="拖动=平移选段 · 拉两端=改时长 · 双击=全片">
+                <i class="tl-edge tl-l"></i><i class="tl-edge tl-r"></i>
+                <i class="tl-head" id="tlHead" hidden></i>
+              </div>
+            </div>
+            <span class="tl-read" id="tlRead"></span>
+          </div>
+        </div>
+        <div class="shotcol">
+          <div class="shotlabel">副屏效果预览<br><small>172 × 320</small></div>
+          <div class="shot"><img id="shot" alt="" draggable="false"></div>
+          <div class="zoomrow">
+            <label>放大</label>
+            <input type="range" id="zoom" min="1" max="4" step="0.02" value="1">
+            <span id="zoomval">1.00×</span>
+          </div>
+          <div class="stageinfo" id="stageinfo"></div>
+        </div>
+      </div>
+
+      <div class="logbox">
+        <div class="loghead">运行日志</div>
+        <div id="log" class="log"></div>
+      </div>
+    </aside>
+
+    <!-- 右: 面板 -->
+    <section class="panel">
+      <div class="card">
+        <div class="cardtitle">① 素材</div>
+        <button id="btnPick" class="btn big">
+          <svg viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z"/></svg>
+          选择素材 (视频 / 图片)</button>
+        <div class="filename" id="fname">未选择</div>
+      </div>
+
+      <div class="card">
+        <div class="cardtitle">② 流畅度快捷档 <small>原片多长就撑多长</small></div>
+        <div class="presetrow">
+          <button class="btn preset" data-fps="20">丝滑 20fps</button>
+          <button class="btn preset" data-fps="12">流畅 12fps</button>
+          <button class="btn preset" data-fps="8">够用 8fps</button>
+          <button class="btn preset" data-fps="4">省电 4fps</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardtitle">③ 参数 <small>手调党</small></div>
+        <div class="grid2">
+          <label>间隔 ms<sub>1~255</sub><input type="number" id="iv" min="1" max="255"></label>
+          <label>帧数上限<sub>≤61</sub><input type="number" id="maxn" min="1" max="61"></label>
+          <label>帧数下限<input type="number" id="minn" min="1" max="61"></label>
+          <label>起点 s<input type="number" id="t0" min="0" step="0.1"></label>
+          <label>片段时长 s<sub>0=全片</sub><input type="number" id="seg" min="0" step="0.1"></label>
+          <label>指定帧数→间隔<div class="specrow"><input type="number" id="specn" min="1" max="61" placeholder="如 48"><button id="btnSpec" class="btn mini"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>套</button></div></label>
+        </div>
+        <div class="estline" id="estline">— 载入素材后显示预估 —</div>
+      </div>
+
+      <div class="card">
+        <div class="cardtitle">④ 出片</div>
+        <button id="btnPrep" class="btn big prep">
+          <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>
+          拆帧预览</button>
+        <label class="namerow">作品名<input type="text" id="animname" maxlength="20" placeholder="vk99"></label>
+        <button id="btnWrite" class="btn big write" disabled>
+          <svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
+          写入键盘副屏</button>
+        <div class="progrow" id="progrow" hidden><div id="progbar"></div><span id="progtxt"></span></div>
+        <div class="runrow">
+          <button id="btnResume" class="btn big resume" hidden>
+            <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>继续写入</button>
+          <button id="btnCancel" class="btn cancel" hidden>
+            <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>取消</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
