@@ -29,6 +29,48 @@ PREV_CACHE = os.path.join(os.environ.get("LOCALAPPDATA", FRAMES_ROOT),
 OFFICIAL_MAX_FRAMES = 61          # 官方 GIF 槽物理上限 (见 studio 注释)
 CAP_MS = OFFICIAL_MAX_FRAMES * 255  # ≈15.5s 原速上限
 
+
+# ---------- 落盘日志: 软件根目录/log, 写不进就退到 LOCALAPPDATA/EDEN/log ----------
+class FileLogger:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.path = None
+        cands = [os.path.join(os.path.dirname(ROOT), "log"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ROOT),
+                              "EDEN", "log")]
+        for d in cands:
+            try:
+                os.makedirs(d, exist_ok=True)
+                probe = os.path.join(d, ".wtest")
+                open(probe, "w").close()
+                os.remove(probe)
+                self.path = os.path.join(
+                    d, f"eden_engine_{time.strftime('%Y%m%d')}.log")
+                return
+            except OSError:
+                continue
+
+    def write(self, msg, tag=""):
+        if not self.path:
+            return
+        try:
+            with self.lock, open(self.path, "a", encoding="utf-8") as f:
+                f.write(f"[{time.strftime('%m-%d %H:%M:%S')}] "
+                        f"{tag}{msg}\n")
+        except OSError:
+            pass
+
+
+FLOG = FileLogger()
+
+
+def _fatal_hook(t, v, tb):
+    FLOG.write("".join(traceback.format_exception(t, v, tb)),
+               "FATAL 未捕获异常: ")
+
+
+sys.excepthook = _fatal_hook
+
 from vk99_prep import (ASPECT, TARGET_H, TARGET_W, compute_crop,  # noqa: E402
                        extract_frames, probe_video)
 from vk99_writer import OfficialWriter, WriterError  # noqa: E402
@@ -251,6 +293,7 @@ class Engine:
 
     # ---------- 日志 ----------
     def log(self, msg):
+        FLOG.write(str(msg))
         with self.log_cv:
             self.log_seq += 1
             self.logs.append({"seq": self.log_seq, "m": str(msg)})
@@ -831,6 +874,7 @@ def parent_watchdog():
     h = k32.OpenProcess(0x100000, False, int(ppid))  # SYNCHRONIZE
     if h:
         k32.WaitForSingleObject(h, 0xFFFFFFFF)       # INFINITE
+        FLOG.write("壳进程已消失, watchdog 自杀退出", "EXIT ")
         os._exit(0)
 
 
@@ -850,13 +894,20 @@ def main():
         except OSError:
             continue
     if srv is None:
+        FLOG.write("8793~8812 端口全部被占, 引擎启动失败", "FATAL ")
         print("EDEN_PORT=FAIL", flush=True)
         sys.exit(1)
+    FLOG.write(f"引擎启动 pid={os.getpid()} port={ENG_PORT[0]} "
+               f"python={sys.executable}")
     print(f"EDEN_PORT={ENG_PORT[0]}", flush=True)
     threading.Thread(target=parent_watchdog, daemon=True).start()
     ENG.log("EDEN 引擎已就绪 (Tauri 壳)")
     ENG.driver_ok = check_driver(ENG.log)
-    srv.serve_forever()
+    try:
+        srv.serve_forever()
+    except Exception as e:
+        FLOG.write(f"serve_forever 异常退出: {e!r}", "FATAL ")
+        raise
 
 
 if __name__ == "__main__":

@@ -17,6 +17,44 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 static PORT: AtomicU16 = AtomicU16::new(0);
 
+// ---------- 落盘日志: 软件根目录/log, 写不进退到 LOCALAPPDATA/EDEN/log ----------
+fn log_file() -> Option<&'static std::path::Path> {
+    use std::path::PathBuf;
+    static CACHE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let mut cands: Vec<PathBuf> = vec![];
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    cands.push(dir.join("log"));
+                }
+            }
+            if let Ok(la) = std::env::var("LOCALAPPDATA") {
+                cands.push(PathBuf::from(la).join("EDEN").join("log"));
+            }
+            for d in cands {
+                if std::fs::create_dir_all(&d).is_ok() {
+                    let day = chrono::Local::now().format("%Y%m%d");
+                    return Some(d.join(format!("eden_shell_{day}.log")));
+                }
+            }
+            None
+        })
+        .as_deref()
+}
+
+fn shell_log(msg: &str) {
+    use std::io::Write;
+    let Some(p) = log_file() else { return };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        let _ = writeln!(
+            f,
+            "[{}] {msg}",
+            chrono::Local::now().format("%m-%d %H:%M:%S")
+        );
+    }
+}
+
 #[derive(Default)]
 struct App {
     child: Mutex<Option<Child>>,
@@ -53,9 +91,12 @@ fn probe_existing_sidecar() -> Option<u16> {
     use std::net::TcpStream;
     use std::time::Duration;
     for p in 8793u16..=8812 {
-        if let Ok(mut s) = TcpStream::connect(format!("127.0.0.1:{}", p)) {
-            let _ = s.set_read_timeout(Some(Duration::from_millis(400)));
-            let _ = s.set_write_timeout(Some(Duration::from_millis(400)));
+        // connect_timeout 硬性封顶: 本机某些防火墙/代理规则会 DROP loopback SYN,
+        // 普通 connect() 每口阻塞约 2s, 20 口 = 40s (实测就是启动慢的元凶).
+        let addr = format!("127.0.0.1:{}", p).parse().unwrap();
+        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(100)) {
+            let _ = s.set_read_timeout(Some(Duration::from_millis(120)));
+            let _ = s.set_write_timeout(Some(Duration::from_millis(120)));
             if s.write_all(b"GET /api/state HTTP/1.0\r\n\r\n").is_ok() {
                 let mut buf = [0u8; 512];
                 if let Ok(n) = s.read(&mut buf) {
@@ -127,6 +168,16 @@ fn attach_port_reader(mut child: Child, state: &App) {
             }
         });
     }
+    // 引擎 stderr 逐行落盘: 线程崩、traceback 这类只在 stderr 冒的东西从此留痕
+    if let Some(err) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let rd = BufReader::new(err);
+            for line in rd.lines().flatten() {
+                shell_log(&format!("[engine-stderr] {line}"));
+            }
+            shell_log("sidecar stdout/stderr 已关闭 (进程退出或崩溃)");
+        });
+    }
     *state.child.lock().unwrap() = Some(child);
 }
 
@@ -150,12 +201,16 @@ fn spawn_sidecar(state: &App) {
                 .env("EDEN_ARGV0_TRAY", &tray_ic)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null());
+                .stderr(Stdio::piped());
             #[cfg(windows)]
             cmd.creation_flags(CREATE_NO_WINDOW);
-            if let Ok(child) = cmd.spawn() {
-                attach_port_reader(child, state);
-                return;
+            match cmd.spawn() {
+                Ok(child) => {
+                    shell_log(&format!("venv 快路径拉起引擎 pid={:?}", child.id()));
+                    attach_port_reader(child, state);
+                    return;
+                }
+                Err(e) => shell_log(&format!("venv 快路径拉起失败: {e}, 转 uv 兼容路径")),
             }
         }
     }
@@ -185,29 +240,19 @@ fn spawn_sidecar(state: &App) {
         .env("EDEN_PPID", std::process::id().to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
+            shell_log(&format!("FATAL sidecar 拉起失败 (uv 路径): {e}"));
             eprintln!("sidecar spawn failed: {e}");
             return;
         }
     };
-    if let Some(out) = child.stdout.take() {
-        std::thread::spawn(move || {
-            let rd = BufReader::new(out);
-            for line in rd.lines().flatten() {
-                if let Some(v) = line.strip_prefix("EDEN_PORT=") {
-                    if let Ok(p) = v.parse::<u16>() {
-                        PORT.store(p, Ordering::SeqCst);
-                    }
-                }
-            }
-        });
-    }
-    *state.child.lock().unwrap() = Some(child);
+    shell_log("uv 兼容路径拉起引擎");
+    attach_port_reader(child, state);
     std::thread::spawn(ensure_venv);
 }
 
@@ -216,6 +261,7 @@ fn kill_sidecar(state: &App) {
     // EDEN_PPID 上, 壳一死引擎立刻自杀, 不会留孤儿. 旧的 curl /api/quit 要在
     // 主线程同步等 cmd+curl (端口死时卡满 -m 2 秒), 正是关窗卡顿的元凶, 已移除.
     if let Some(c) = state.child.lock().unwrap().as_mut() {
+        shell_log("壳退出, kill sidecar");
         let _ = c.kill();
     }
 }
@@ -244,16 +290,29 @@ fn sidecar_port() -> u16 {
 }
 
 fn main() {
+    // 闪退留痕: 任何 panic 先写进 log 再走默认处理
+    std::panic::set_hook(Box::new(|info| {
+        shell_log(&format!("FATAL panic: {info}"));
+    }));
+    shell_log("== EDEN 壳启动 ==");
     tauri::Builder::default()
         .manage(App::default())
         .setup(|app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
+                let t0 = std::time::Instant::now();
                 let state = handle.state::<App>();
                 if let Some(p) = probe_existing_sidecar() {
                     PORT.store(p, Ordering::SeqCst);
-                    eprintln!("reuse existing sidecar on :{p}");
+                    shell_log(&format!(
+                        "复用已在 :{p} 的引擎 (probe {}ms)",
+                        t0.elapsed().as_millis()
+                    ));
                 } else {
+                    shell_log(&format!(
+                        "probe 未命中 ({}ms), 开始拉起 sidecar",
+                        t0.elapsed().as_millis()
+                    ));
                     spawn_sidecar(&state);
                 }
             });
@@ -267,5 +326,8 @@ fn main() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("EDEN 启动失败");
+        .unwrap_or_else(|e| {
+            shell_log(&format!("FATAL 壳启动失败: {e}"));
+            panic!("EDEN 启动失败: {e}");
+        });
 }
