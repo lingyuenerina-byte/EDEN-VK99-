@@ -14,3 +14,4 @@ eden-tauri/src-tauri/engine/redist/*.exe
 
 # 日志
 *.log
+eden-tauri/src-tauri/engine/runtime/

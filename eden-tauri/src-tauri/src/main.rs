@@ -214,7 +214,36 @@ fn spawn_sidecar(state: &App) {
             }
         }
     }
-    // 兼容路径: uv 现建 ephemeral env (首启动慢一点, 同时后台补建常驻 venv)
+    // 中位路径: 随包便携 Python (1.2.1 起, 新机首启零依赖, 不再赌用户装没装 uv)
+    let root_pb = std::path::PathBuf::from(&root);
+    for cand in [root_pb.join("runtime"), root_pb.join("engine").join("runtime")] {
+        let py = cand.join("python.exe");
+        if py.exists() {
+            let mut cmd = Command::new(&py);
+            cmd.args(["-B", "-u", "vk99_server.py"])
+                .current_dir(&root)
+                .env("EDEN_PPID", std::process::id().to_string())
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(windows)]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            match cmd.spawn() {
+                Ok(child) => {
+                    shell_log(&format!(
+                        "随包 runtime 拉起引擎 pid={:?} ({})",
+                        child.id(),
+                        py.display()
+                    ));
+                    attach_port_reader(child, state);
+                    return;
+                }
+                Err(e) => shell_log(&format!("随包 runtime 拉起失败: {e}")),
+            }
+        }
+    }
+    // 兼容路径: uv 现建 ephemeral env (仅开发态/极端情况; 需要本机有 uv)
+    shell_log("uv 兼容路径 (需本机已安装 uv, 新机用户请反馈日志)");
     let mut cmd = Command::new("cmd");
     cmd.current_dir(&root)
         .args([

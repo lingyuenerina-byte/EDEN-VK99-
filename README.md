@@ -28,7 +28,7 @@
 2. 确保已安装官方 **Valkyrie Driver**（`%LOCALAPPDATA%\Programs\Valkyrie Driver\`），没有的话软件会拉起随包安装程序，装不装由你决定；
 3. 插上 VK99 键盘，启动 EDEN-VK99II。
 
-首次启动会较慢（Windows Defender 需要扫描随包的 Python 运行库，约 10~40 秒；之后恢复秒级。可在「病毒和威胁防护 → 排除项」中添加 `%LOCALAPPDATA%\EDEN\venv` 提速）。
+安装包内嵌便携版 Python 运行时（含全部依赖），终端用户无需安装 Python 或 uv，首启约 2~4 秒。源码运行时才需要 [uv](https://docs.astral.sh/uv/) 与 Python 3.12。
 
 ## 从源码构建
 
