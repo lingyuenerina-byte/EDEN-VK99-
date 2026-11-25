@@ -55,7 +55,8 @@ class FileLogger:
             return
         try:
             with self.lock, open(self.path, "a", encoding="utf-8") as f:
-                f.write(f"[{time.strftime('%m-%d %H:%M:%S')}] "
+                f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}."
+                        f"{int(time.time() % 1 * 1000):03d}] "
                         f"{tag}{msg}\n")
         except OSError:
             pass
@@ -66,7 +67,7 @@ FLOG = FileLogger()
 
 def _fatal_hook(t, v, tb):
     FLOG.write("".join(traceback.format_exception(t, v, tb)),
-               "FATAL 未捕获异常: ")
+               "FATAL uncaught: ")
 
 
 sys.excepthook = _fatal_hook
@@ -118,10 +119,14 @@ def extract_frames_fast(video, info, fps, zoom, panx, pany, outdir,
     cmd += ["-vf", vf, "-frames:v", str(max_frames),
             os.path.join(outdir, f"{prefix}_%03d.png")]
     try:
+        ENG.log("ffmpeg extract cmd: " + " ".join(cmd))
         r = subprocess.run(cmd, capture_output=True, timeout=900)
-    except Exception:
+    except Exception as e:
+        ENG.log(f"!! ffmpeg extract error: {e!r}")
         return 0
     if r.returncode != 0:
+        ENG.log("!! ffmpeg extract failed rc=%d stderr: %s"
+                % (r.returncode, (r.stderr or b"")[-400:].decode("utf-8", "replace")))
         return 0
     return len([n for n in os.listdir(outdir)
                 if n.lower().endswith(".png")])
@@ -139,9 +144,15 @@ def make_preview_video(png_dir, fps, out_path, limit=None):
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast",
             "-movflags", "+faststart", out_path]
     try:
+        ENG.log("ffmpeg preview cmd: " + " ".join(cmd))
         r = subprocess.run(cmd, capture_output=True, timeout=120)
-        return out_path if r.returncode == 0 and os.path.exists(out_path) else None
-    except Exception:
+        if r.returncode != 0:
+            ENG.log("!! ffmpeg preview failed rc=%d stderr: %s"
+                    % (r.returncode, (r.stderr or b"")[-400:].decode("utf-8", "replace")))
+            return None
+        return out_path if os.path.exists(out_path) else None
+    except Exception as e:
+        ENG.log(f"!! ffmpeg preview error: {e!r}")
         return None
 
 
@@ -155,18 +166,18 @@ def check_driver(log):
         exe = os.path.join(os.environ.get("LOCALAPPDATA", ""),
                            "Programs", "Valkyrie Driver", "Valkyrie Driver.exe")
     if exe and os.path.exists(exe):
-        log(f"✓ 检测到官方 Valkyrie Driver ({exe})")
+        log(f"Valkyrie Driver found: {exe}")
         return True
     setup = os.path.join(ROOT, "redist",
                          "Valkyrie_setup_3.2.19_WIN20261021.exe")
-    log("✗ 未检测到官方 Valkyrie Driver: 已为您启动安装程序, 装完即可写入…")
+    log("Valkyrie Driver NOT found; launched bundled installer, retry after install")
     if os.path.exists(setup):
         try:
             subprocess.Popen([setup])
         except Exception as ex:
-            log(f"安装程序启动失败: {ex}")
+            log(f"failed to launch bundled installer: {ex}")
     else:
-        log(f"找不到随包安装包: {setup}")
+        log(f"bundled installer missing: {setup}")
     return False
 
 
@@ -217,7 +228,7 @@ class Engine:
         ff = find_ffmpeg()
         if not ff:
             self.prev_state = "fail"
-            self.log("!! 未找到 ffmpeg, 预览只显示首帧海报 (写入不受影响)")
+            self.log("!! ffmpeg not found: preview shows first-frame poster only (writing unaffected)")
             return
 
         def ok_file(p):
@@ -240,7 +251,7 @@ class Engine:
                 os.remove(out)
             except OSError:
                 pass
-            self.log("⚠ 预览缓存已损坏, 重新转码")
+            self.log("preview cache corrupted, re-transcoding")
         self.prev_state = "run"
 
         def transcode(extra):
@@ -279,20 +290,20 @@ class Engine:
             try:
                 code, err = transcode(["-preset", "veryfast", "-crf", "26"])
                 if code != 0:
-                    self.log(f"预览转码第一次失败 (exit {code}): "
+                    self.log(f"preview transcode attempt 1 failed (exit {code}): "
                              f"{err[-180:] or '无报错输出'} … 低配重试")
                     code, err = transcode(["-preset", "ultrafast",
                                            "-crf", "30", "-threads", "4"])
                 if code == 0:
                     self.prev_state = "ready"
-                    self.log("预览转码完成 ✓")
+                    self.log("preview transcode done")
                 else:
                     self.prev_state = "fail"
-                    self.log(f"!! 预览转码失败 (exit {code}): "
+                    self.log(f"!! preview transcode failed (exit {code}): "
                              f"{err[-180:] or '无报错输出'} — 只显示首帧海报")
             except Exception as e:
                 self.prev_state = "fail"
-                self.log(f"!! 预览转码异常: {e}")
+                self.log(f"!! preview transcode error: {e}")
         threading.Thread(target=run, daemon=True).start()
 
     # ---------- 日志 ----------
@@ -378,7 +389,7 @@ class Engine:
         """一键贴合原速 (studio.auto_fit 同款语义)."""
         with self.lock:
             if not self.info or self.dur() <= 0 or self.info["frames"] <= 1:
-                self.log("!! 先选个视频素材再点自动适配呀…")
+                self.log("!! select a video first, then hit auto-fit")
                 return self.state()
             if self.mode == MODE_IMG:
                 self.mode = MODE_ANIM
@@ -386,15 +397,15 @@ class Engine:
                 allow = max(0.1, self.full_dur() - self.t0)
                 seg = min(allow, CAP_MS / 1000.0)
                 self.seg = seg
-                self.log(f"⚡ 官方 GIF 原速物理上限只有 {CAP_MS / 1000:.1f}s "
+                self.log(f"official GIF speed limit is only {CAP_MS / 1000:.1f}s "
                          f"({OFFICIAL_MAX_FRAMES}帧×255ms): 已自动把片段时长改成 {seg:.1f}s,")
-                self.log(f"   从 {self.t0:.1f}s 开始原速播放. 想播别的段落: 改「起点」再点一次~")
+                self.log(f"   playing at original speed from {self.t0:.1f}s; change start point for another segment")
             if self.maxn < self.need_frames():
                 self.maxn = min(self.need_frames(), OFFICIAL_MAX_FRAMES)
             self.iv = max(1, min(255, int(round(self.dur() * 1000.0 / self.maxn))))
             est = self.est_frames()
             real = est * self.eff_iv() / (self.dur() * 1000.0) if self.dur() else 1
-            self.log(f"⚡ 自动适配: 片段 {self.dur():.1f}s → {est} 帧 · "
+            self.log(f"auto-fit: clip {self.dur():.1f}s -> {est} frames, "
                      f"间隔 {self.eff_iv()}ms (速度×{real:.2f}, 写入前官方间隔自动同步)")
             return self.state()
 
@@ -408,10 +419,10 @@ class Engine:
                 cap_seg = OFFICIAL_MAX_FRAMES * iv / 1000.0
                 seg = min(cap_seg, max(0.1, self.full_dur() - self.t0))
                 self.seg = seg
-                self.log(f"🍃 流畅预设 {fps}fps: 间隔 {iv}ms, 片段取 {seg:.1f}s "
+                self.log(f"smooth preset {fps}fps: interval {iv}ms, clip {seg:.1f}s "
                          f"({OFFICIAL_MAX_FRAMES}帧撑满) — 想要更长只能牺牲流畅哦")
             else:
-                self.log(f"🍃 流畅预设 {fps}fps: 间隔已设 {iv}ms (先选视频再拆帧)")
+                self.log(f"smooth preset {fps}fps: interval set to {iv}ms (pick video then extract)")
             return self.state()
 
     def set_frames(self, n):
@@ -420,10 +431,10 @@ class Engine:
             try:
                 n = int(n)
             except Exception:
-                self.log("!! 帧数得填数字哦…")
+                self.log("!! frame count must be a number")
                 return self.state()
             if n < 1 or n > OFFICIAL_MAX_FRAMES:
-                self.log(f"!! 帧数请在 1~{OFFICIAL_MAX_FRAMES} 之间 (官方 GIF 容量上限)…")
+                self.log(f"!! frame count must be 1~{OFFICIAL_MAX_FRAMES} (official GIF capacity limit)")
                 return self.state()
             if self.mode == MODE_IMG:
                 self.mode = MODE_ANIM
@@ -433,11 +444,11 @@ class Engine:
                 self.maxn = max(self.maxn, n)
                 self.minn = min(self.minn, n)
                 if iv == 255 and n * 255 < self.dur() * 1000 * 0.95:
-                    self.log(f"已按目标 {n} 帧: 间隔顶到官方最大 255ms, "
+                    self.log(f"target {n} frames: interval clamped to official max 255ms, "
                              f"仍会比原视频快 {self.dur()*1000/(n*255):.1f} 倍… "
                              "帧数封顶没法再加了, 把「时长」改短些再点自动适配吧")
                 else:
-                    self.log(f"已按目标 {n} 帧反推: 间隔 {self.iv}ms → "
+                    self.log(f"target {n} frames solved backward: interval {self.iv}ms -> "
                              f"实际 {self.est_frames()} 帧")
             else:
                 self.maxn = max(self.maxn, n)
@@ -448,12 +459,12 @@ class Engine:
     def open_file(self, path):
         with self._open_lock:
             if not os.path.exists(path):
-                self.log(f"!! 文件不存在: {path}")
+                self.log(f"!! file not found: {path}")
                 return None
             try:
                 info, first = probe_video(path)
             except Exception as e:
-                self.log(f"!! 读取失败: {e}")
+                self.log(f"!! read failed: {e}")
                 return None
             with self.lock:
                 self.file, self.info, self.first = path, info, first
@@ -470,7 +481,7 @@ class Engine:
                                           if c.isalnum() or c in "-_ ")[:20].strip()
                                   or "vk99")
             d = info["w"] / info["h"]
-            self.log(f"✓ 已载入 {os.path.basename(path)} "
+            self.log(f"loaded {os.path.basename(path)} "
                      f"({info['w']}x{info['h']}, fps={info['fps']:.1f}, "
                      f"{self.full_dur():.1f}s, 长宽比{d:.2f})")
             if self.driver_ok is None:
@@ -486,7 +497,7 @@ class Engine:
         outdir = os.path.join(FRAMES_ROOT, self.batch)
         os.makedirs(outdir, exist_ok=True)
         if mode == MODE_IMG or (self.info and self.info["fps"] <= 0):
-            self.log("== 单图模式: 裁切导出 1 帧")
+            self.log("== single-image mode: crop and export 1 frame")
             from PIL import Image
             h, w = self.first.shape[:2]
             crop = compute_crop(w, h, self.zoom, self.panx, self.pany)
@@ -501,15 +512,15 @@ class Engine:
             t0 = self.t0
             seg = self.dur()
             if t0 > 0 or abs(seg - self.full_dur()) > 0.01:
-                self.log(f"== 拆帧片段: {t0:.1f}s → {t0 + seg:.1f}s (原片 {self.full_dur():.1f}s)")
-            self.log(f"== 拆帧: 间隔 {iv}ms → {fps:.2f} fps, 片段取 {est} 帧")
+                self.log(f"== extract range: {t0:.1f}s -> {t0 + seg:.1f}s (source {self.full_dur():.1f}s)")
+            self.log(f"== extract: interval {iv}ms -> {fps:.2f} fps, {est} frames")
             n = extract_frames_fast(self.file, self.info, fps, self.zoom,
                                     self.panx, self.pany, outdir, est,
                                     t0=t0, seg_len=seg)
             if n > 0:
-                self.log(f"   ffmpeg 快速拆帧完成: {n} 帧")
+                self.log(f"   ffmpeg fast extract done: {n} frames")
             else:
-                self.log("   (ffmpeg 不可用, 改用逐帧扫描…)")
+                self.log("   (ffmpeg unavailable, falling back to frame scan...)")
                 n = extract_frames(self.file, 1000.0 / self.eff_iv(), self.zoom,
                                    self.panx, self.pany, outdir, max_frames=est,
                                    prefix="f", t0=t0, seg_len=seg,
@@ -520,7 +531,7 @@ class Engine:
                     sorted(x for x in os.listdir(outdir)
                            if x.lower().endswith(".png"))]
         self.rels = rels
-        self.log(f"== 拆帧完成: {len(rels)} 帧 → {outdir}")
+        self.log(f"== extract done: {len(rels)} frames -> {outdir}")
         pv = make_preview_video(outdir, 1000.0 / self.eff_iv(),
                                 os.path.join(outdir, "preview.mp4"),
                                 limit=len(rels))
@@ -533,7 +544,7 @@ class Engine:
             if self.busy:
                 return "busy"
             if not self.file:
-                self.log("!! 还没有素材…请先点「选择视频 / 图片」")
+                self.log("!! no media selected yet (pick video/image first)")
                 return "nofile"
             self.busy, self.cancel = True, False
             self.phase = "preparing"
@@ -543,13 +554,13 @@ class Engine:
             try:
                 t = time.time()
                 self._extract()
-                self.log(f"   拆帧耗时 {time.time() - t:.1f}s")
+                self.log(f"   extract took {time.time() - t:.1f}s")
                 with self.lock:
                     self.phase = "ready"
             except Exception as e:
                 with self.lock:
                     self.phase = "error" if self.file else "idle"
-                self.log(f"!! 拆帧失败: {type(e).__name__}: {e}")
+                self.log(f"!! extract failed: {type(e).__name__}: {e}")
             finally:
                 with self.lock:
                     self.busy = False
@@ -558,7 +569,7 @@ class Engine:
 
     # ---------- 写入 ----------
     def _pause_gate(self):
-        self.log("⏸ 帧已全部导入官方编辑器, 等你确认画面后点「▶ 继续写入」")
+        self.log("all frames loaded into official editor; press RESUME to continue writing")
         with self.lock:
             self.phase = "awaiting"
         while not self.resume_evt.wait(0.25):
@@ -566,7 +577,7 @@ class Engine:
                 raise WriterError("已取消")
         with self.lock:
             self.phase = "writing"
-        self.log("▶ 继续写入")
+        self.log("resume writing")
         return self.eff_iv()
 
     def write_start(self, name):
@@ -574,23 +585,23 @@ class Engine:
             if self.busy:
                 return "busy"
             if not self.file:
-                self.log("!! 还没有素材…请先点「选择视频 / 图片」")
+                self.log("!! no media selected yet (pick video/image first)")
                 return "nofile"
             if not self.rels:
-                self.log("!! 请先「拆帧预览」再写入 (点右上角准备按钮)")
+                self.log("!! run frame preview before writing")
                 return "noframes"
             self.anim_name = (name or "").strip() or self.anim_name
             self.busy, self.cancel = True, False
             self.resume_evt.clear()
             self.phase = "writing"
             self.prog = (0, len(self.rels))
-            self.log(f"作品命名: {self.anim_name}")
+            self.log(f"animation name: {self.anim_name}")
 
         def work():
             try:
                 self.resume_evt.clear()
                 rels = self.rels
-                self.log("== 连接官方驱动 (没开的话会自动拉起)…")
+                self.log("== connecting official driver (launches it if not running)...")
                 w = OfficialWriter(FRAMES_ROOT, log=self.log,
                                    progress=lambda c, t:
                                    self.__dict__.__setitem__("prog", (c, t)))
@@ -604,7 +615,7 @@ class Engine:
                 self.writer = None
                 with self.lock:
                     self.phase = "done"
-                self.log("✅ 写入完成! 去键盘副屏看看效果吧~")
+                self.log("== write completed OK, check keyboard subscreen")
             except WriterError as e:
                 if self.writer:
                     try:
@@ -614,7 +625,7 @@ class Engine:
                     self.writer = None
                 with self.lock:
                     self.phase = "error"
-                self.log(f"✗ {'已取消' if self.cancel else e}")
+                self.log(f"!! {'cancelled' if self.cancel else e}")
             except Exception as e:
                 if self.writer:
                     try:
@@ -644,7 +655,7 @@ class Engine:
                 self.writer.cancel = True
             except Exception:
                 pass
-        self.log("… 正在取消 (等当前步骤收尾)")
+        self.log("cancelling, waiting current step to settle")
         return self.state()
 
     # ---------- 状态 ----------
@@ -685,8 +696,11 @@ ENG = Engine()
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"   # Range 流播必需: keep-alive + 精确 Content-Length
-    def log_message(self, *a):          # 静音访问日志
-        pass
+    def log_message(self, format, *args):   # HTTP 访问日志落盘 (英文全量)
+        try:
+            ENG.log("HTTP " + (format % args))
+        except Exception:
+            pass
 
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -878,7 +892,7 @@ def parent_watchdog():
     h = k32.OpenProcess(0x100000, False, int(ppid))  # SYNCHRONIZE
     if h:
         k32.WaitForSingleObject(h, 0xFFFFFFFF)       # INFINITE
-        FLOG.write("壳进程已消失, watchdog 自杀退出", "EXIT ")
+        FLOG.write("parent shell gone, watchdog self-exit", "EXIT ")
         os._exit(0)
 
 
@@ -898,19 +912,19 @@ def main():
         except OSError:
             continue
     if srv is None:
-        FLOG.write("8793~8812 端口全部被占, 引擎启动失败", "FATAL ")
+        FLOG.write("all ports 8793-8812 busy, engine failed to start", "FATAL ")
         print("EDEN_PORT=FAIL", flush=True)
         sys.exit(1)
-    FLOG.write(f"引擎启动 pid={os.getpid()} port={ENG_PORT[0]} "
+    FLOG.write(f"engine started pid={os.getpid()} port={ENG_PORT[0]} "
                f"python={sys.executable}")
     print(f"EDEN_PORT={ENG_PORT[0]}", flush=True)
     threading.Thread(target=parent_watchdog, daemon=True).start()
-    ENG.log("EDEN 引擎已就绪 (Tauri 壳)")
+    ENG.log("EDEN engine ready (Tauri shell)")
     ENG.driver_ok = check_driver(ENG.log)
     try:
         srv.serve_forever()
     except Exception as e:
-        FLOG.write(f"serve_forever 异常退出: {e!r}", "FATAL ")
+        FLOG.write(f"serve_forever crashed: {e!r}", "FATAL ")
         raise
 
 

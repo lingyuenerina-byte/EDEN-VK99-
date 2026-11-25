@@ -322,7 +322,7 @@ class OfficialWriter:
             b = (self._body() or "")
             if "设备搜索中" in b or "欢迎使用" in b:
                 raise WriterError("驱动停在「设备搜索中」——请确认键盘已开机且蓝牙已连接, 连上后重试")
-            self.log("屏幕设置页打不开, reload 驱动页面…")
+            self.log("screen-settings page unavailable, reloading driver UI...")
             self.tg.call("Page.reload")
             self._js_wait("""(() => document.body &&
               document.body.innerText.includes('屏幕设置'))()""", 30, 1.0)
@@ -336,7 +336,7 @@ class OfficialWriter:
         port = free_port()
         self._srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
         threading.Thread(target=self._srv.serve_forever, daemon=True).start()
-        self.log(f"帧文件服务: http://127.0.0.1:{port}/ ← {root}")
+        self.log(f"frame file server: http://127.0.0.1:{port}/ <- {root}")
         return port
 
     def _clear_frames(self):
@@ -348,7 +348,7 @@ class OfficialWriter:
             fr = self._frames()
             if not fr or fr[0] <= 1:
                 return
-            self.log(f"编辑器还残留 {fr} 帧旧内容, 先「删除所有帧」…")
+            self.log(f"editor still holds {fr} old frames, clearing them first...")
             before = fr[0]
             if self._click_text("删除所有帧") != "ok":
                 return
@@ -357,7 +357,7 @@ class OfficialWriter:
                 self._click_text("确定")
             time.sleep(0.9)
             after = self._frames()
-            self.log(f"   清理后: {after}")
+            self.log(f"   after clear: {after}")
             if not after or after[0] <= 1 or after[0] >= before:
                 return
 
@@ -439,11 +439,11 @@ class OfficialWriter:
         self._name = name or "vk99"
         self._interval = int(interval) if interval else None
         total = len(frame_rels)
-        self.log(f"== 开始写入: {total} 帧")
+        self.log(f"== writing {total} frames")
         if total > 1:
             self._clear_frames()
         r = self._load_frame(frame_rels[0], port)
-        self.log(f"   第 1 帧: {r}")
+        self.log(f"   frame 1: {r}")
         if r != "confirmed":
             raise WriterError(f"第 1 帧载入失败: {r}")
         self.progress(1, total)
@@ -454,7 +454,7 @@ class OfficialWriter:
             mean = self._canvas_mean()
             if mean > 0 or self.cancel:
                 break
-        self.log(f"   canvas 均值: {mean}")
+        self.log(f"   canvas mean: {mean}")
         if mean == 0:
             raise WriterError("画布是空的, 中止 (不把黑图刷进键盘)")
 
@@ -465,7 +465,7 @@ class OfficialWriter:
                     self._interval = int(nv)
                 if self.cancel:
                     raise WriterError("已取消")
-            self.log("== 保存图片 (名字自动填: %s)" % self._name)
+            self.log("== saving image (auto name: %s)" % self._name)
             self._click_text("保存图片")
             time.sleep(1.5)
             self._type_name()
@@ -473,7 +473,7 @@ class OfficialWriter:
             if rr is not True:
                 raise WriterError(f"保存失败: {rr}")
             time.sleep(1.0)
-            self.log("== 写入图片 (蓝牙可能要几分钟…)")
+            self.log("== pushing image (bluetooth may take minutes...)")
             self._click_text("写入图片")
             time.sleep(1.2)
             if "确定" in self._body():
@@ -489,14 +489,14 @@ class OfficialWriter:
                     raise WriterError("添加帧不可点")
                 time.sleep(0.5)
                 r = self._load_frame(rel, port)
-                self.log(f"   第 {i}/{total} 帧: {r} (帧 {self._frames()})")
+                self.log(f"   frame {i}/{total}: {r} (editor: {self._frames()})")
                 if r != "confirmed":
                     raise WriterError(f"第 {i} 帧载入失败: {r}")
                 self.progress(i, total)
                 time.sleep(0.5)
             fr = self._frames()
             if fr and fr[0] < total:
-                self.log(f"!! 官方画板只保留了 {fr[0]}/{total} 帧 (上限 {fr[1]}): "
+                self.log(f"!! official canvas kept only {fr[0]}/{total} frames (limit {fr[1]}): "
                          f"实际播放约 {fr[0] * (self._interval or 50) / 1000:.1f}s, "
                          "比工作室预算的短, 快放更多 — 缩短片段或减少帧数间隔试算")
                 self._kept = fr[0]
@@ -508,7 +508,7 @@ class OfficialWriter:
                     self._interval = int(nv)
                 if self.cancel:
                     raise WriterError("已取消")
-            self.log("== 保存动画 (名字自动填: %s)" % self._name)
+            self.log("== saving animation (auto name: %s)" % self._name)
             self._click_text("保存动画")
             time.sleep(1.5)
             self._type_name()
@@ -520,14 +520,14 @@ class OfficialWriter:
                 want = max(1, min(255, int(self._interval)))
                 got = self._set_interval(want)
                 if str(got) == str(want):
-                    self.log(f"   图片间隔: {got} ms ✔ (已确认写进官方动画对象)")
+                    self.log(f"   frame interval: {got} ms confirmed in official animation object")
                 elif got == "no-interval-input":
-                    self.log("   !! 没找到官方间隔输入框, 请在屏幕设置页手动填 %d" % want)
+                    self.log("   !! interval input not found, set %d ms manually in screen settings" % want)
                 else:
-                    self.log(f"   !! 间隔设成 {want} 但官方回读是 {got} — "
+                    self.log(f"   !! interval set to {want} but official reads {got} - "
                              f"键盘实际按 {got}ms/帧播放, 请手动确认")
                 time.sleep(0.6)
-            self.log(f"== 写入动画 {total} 帧 (可能要几分钟…)")
+            self.log(f"== writing animation {total} frames (may take minutes...)")
             self._click_text("写入动画")
             time.sleep(1.2)
             if "确定" in self._body():
@@ -535,7 +535,7 @@ class OfficialWriter:
             rr = self._wait_done(300 + 300 * total)
         if rr is not True:
             raise WriterError(f"写入未正常结束: {rr}")
-        self.log(f"== 完成 ✔ 帧状态: {self._frames()}")
+        self.log(f"== done, frames in editor: {self._frames()}")
 
     def close(self):
         if self._srv:

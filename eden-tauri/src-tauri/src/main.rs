@@ -50,7 +50,7 @@ fn shell_log(msg: &str) {
         let _ = writeln!(
             f,
             "[{}] {msg}",
-            chrono::Local::now().format("%m-%d %H:%M:%S")
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
         );
     }
 }
@@ -175,7 +175,7 @@ fn attach_port_reader(mut child: Child, state: &App) {
             for line in rd.lines().flatten() {
                 shell_log(&format!("[engine-stderr] {line}"));
             }
-            shell_log("sidecar stdout/stderr 已关闭 (进程退出或崩溃)");
+            shell_log("sidecar stdout/stderr closed (process exited or crashed)");
         });
     }
     *state.child.lock().unwrap() = Some(child);
@@ -206,11 +206,11 @@ fn spawn_sidecar(state: &App) {
             cmd.creation_flags(CREATE_NO_WINDOW);
             match cmd.spawn() {
                 Ok(child) => {
-                    shell_log(&format!("venv 快路径拉起引擎 pid={:?}", child.id()));
+                    shell_log(&format!("engine spawned via persistent venv, pid={:?}", child.id()));
                     attach_port_reader(child, state);
                     return;
                 }
-                Err(e) => shell_log(&format!("venv 快路径拉起失败: {e}, 转 uv 兼容路径")),
+                Err(e) => shell_log(&format!("venv fast path failed: {e}, trying uv fallback")),
             }
         }
     }
@@ -231,19 +231,19 @@ fn spawn_sidecar(state: &App) {
             match cmd.spawn() {
                 Ok(child) => {
                     shell_log(&format!(
-                        "随包 runtime 拉起引擎 pid={:?} ({})",
+                        "engine spawned via bundled runtime, pid={:?} ({})",
                         child.id(),
                         py.display()
                     ));
                     attach_port_reader(child, state);
                     return;
                 }
-                Err(e) => shell_log(&format!("随包 runtime 拉起失败: {e}")),
+                Err(e) => shell_log(&format!("bundled runtime spawn failed: {e}")),
             }
         }
     }
     // 兼容路径: uv 现建 ephemeral env (仅开发态/极端情况; 需要本机有 uv)
-    shell_log("uv 兼容路径 (需本机已安装 uv, 新机用户请反馈日志)");
+    shell_log("uv fallback path (requires uv installed on this machine)");
     let mut cmd = Command::new("cmd");
     cmd.current_dir(&root)
         .args([
@@ -275,12 +275,12 @@ fn spawn_sidecar(state: &App) {
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            shell_log(&format!("FATAL sidecar 拉起失败 (uv 路径): {e}"));
+            shell_log(&format!("FATAL sidecar spawn failed (uv path): {e}"));
             eprintln!("sidecar spawn failed: {e}");
             return;
         }
     };
-    shell_log("uv 兼容路径拉起引擎");
+    shell_log("engine spawned via uv fallback");
     attach_port_reader(child, state);
     std::thread::spawn(ensure_venv);
 }
@@ -290,7 +290,7 @@ fn kill_sidecar(state: &App) {
     // EDEN_PPID 上, 壳一死引擎立刻自杀, 不会留孤儿. 旧的 curl /api/quit 要在
     // 主线程同步等 cmd+curl (端口死时卡满 -m 2 秒), 正是关窗卡顿的元凶, 已移除.
     if let Some(c) = state.child.lock().unwrap().as_mut() {
-        shell_log("壳退出, kill sidecar");
+        shell_log("shell exiting, killing sidecar");
         let _ = c.kill();
     }
 }
@@ -323,7 +323,7 @@ fn main() {
     std::panic::set_hook(Box::new(|info| {
         shell_log(&format!("FATAL panic: {info}"));
     }));
-    shell_log("== EDEN 壳启动 ==");
+    shell_log("== EDEN shell start ==");
     tauri::Builder::default()
         .manage(App::default())
         .setup(|app| {
@@ -334,12 +334,12 @@ fn main() {
                 if let Some(p) = probe_existing_sidecar() {
                     PORT.store(p, Ordering::SeqCst);
                     shell_log(&format!(
-                        "复用已在 :{p} 的引擎 (probe {}ms)",
+                        "reusing existing engine at :{p} 的引擎 (probe {}ms)",
                         t0.elapsed().as_millis()
                     ));
                 } else {
                     shell_log(&format!(
-                        "probe 未命中 ({}ms), 开始拉起 sidecar",
+                        "probe miss ({}ms), spawning sidecar",
                         t0.elapsed().as_millis()
                     ));
                     spawn_sidecar(&state);
@@ -356,7 +356,7 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            shell_log(&format!("FATAL 壳启动失败: {e}"));
+            shell_log(&format!("FATAL shell startup failed: {e}"));
             panic!("EDEN 启动失败: {e}");
         });
 }
