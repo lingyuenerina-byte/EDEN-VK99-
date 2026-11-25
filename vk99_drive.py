@@ -14,11 +14,68 @@ import urllib.request
 
 import websocket
 
-EXE = r"C:\Users\Lingy\AppData\Local\Programs\Valkyrie Driver\Valkyrie Driver.exe"
 PORT = 9223
 
 
+def _find_driver_exe():
+    """定位官方 Valkyrie Driver, 不写死用户名: 环境变量 > 常见安装目录 > 注册表卸载表."""
+    import os
+    import shutil
+    env = os.environ.get("VALKYRIE_DRIVER_EXE", "")
+    if env and os.path.exists(env):
+        return env
+    name = "Valkyrie Driver.exe"
+    cands = []
+    for var in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+        base = os.environ.get(var, "")
+        if base:
+            cands.append(os.path.join(base, "Programs", "Valkyrie Driver", name))
+            cands.append(os.path.join(base, "Valkyrie Driver", name))
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    # PATH 里碰运气(装到别处但加了 PATH)
+    w = shutil.which(name) or shutil.which("ValkyrieDriver")
+    if w:
+        return w
+    try:
+        import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for view in (0, winreg.KEY_WOW64_64KEY):
+                try:
+                    key = winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\Uninstall", 0, winreg.KEY_READ | view)
+                except OSError:
+                    continue
+                i = 0
+                while True:
+                    try:
+                        sub = winreg.EnumKey(key, i)
+                    except OSError:
+                        break
+                    i += 1
+                    try:
+                        with winreg.OpenKey(key, sub) as k:
+                            disp = winreg.QueryValueEx(k, "DisplayName")[0]
+                            if "valkyrie" not in str(disp).lower():
+                                continue
+                            loc = winreg.QueryValueEx(k, "InstallLocation")[0].strip('"')
+                            for guess in (name, "ValkyrieDriver.exe"):
+                                p = os.path.join(loc, guess)
+                                if os.path.exists(p):
+                                    return p
+                    except OSError:
+                        continue
+    except Exception:
+        pass
+    return None
+
+
+EXE = _find_driver_exe()
+
+
 def ensure_driver():
+    if EXE is None:
+        raise RuntimeError("未找到官方 Valkyrie Driver, 请先安装驱动, 或设置环境变量 VALKYRIE_DRIVER_EXE 指向其 exe")
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json/version", timeout=2)
         return

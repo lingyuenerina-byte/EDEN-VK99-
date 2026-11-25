@@ -148,10 +148,14 @@ def make_preview_video(png_dir, fps, out_path, limit=None):
 def check_driver(log):
     """开工先查官方 Valkyrie Driver: 没有就拉起随包安装程序 (studio 同款).
     只负责弹出安装界面, 装不装由用户定夺."""
-    exe = os.path.join(os.environ.get("LOCALAPPDATA", ""),
-                       "Programs", "Valkyrie Driver", "Valkyrie Driver.exe")
-    if os.path.exists(exe):
-        log("✓ 检测到官方 Valkyrie Driver")
+    try:
+        from vk99_drive import _find_driver_exe
+        exe = _find_driver_exe()
+    except Exception:
+        exe = os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                           "Programs", "Valkyrie Driver", "Valkyrie Driver.exe")
+    if exe and os.path.exists(exe):
+        log(f"✓ 检测到官方 Valkyrie Driver ({exe})")
         return True
     setup = os.path.join(ROOT, "redist",
                          "Valkyrie_setup_3.2.19_WIN20261021.exe")
